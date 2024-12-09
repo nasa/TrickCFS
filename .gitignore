@@ -1,0 +1,64 @@
+# OS and editor files
+*.swp
+.*.swp
+.~lock.*#
+*.o
+.nfs*
+*.pyc
+.settings
+
+# CFS output files
+.cdskeyfile
+.reservedkeyfile
+.resetkeyfile
+
+# Trick auto-gen and compiled files
+object_*
+swig
+io_src
+sims/SIM_*/trick
+sims/SIM_*/lib_*
+sims/SIM_*/S_main_*
+sims/SIM_*/makefile
+sims/SIM_*/cf
+.S_library*
+.icg_no_found
+S_sie.resource
+CP_out
+MAKE_out
+Makefile_sim
+Makefile_swig
+S_default.dat
+S_document.xml
+S_library_list
+S_source.*
+
+# Trick runtime files
+DP_rt_*
+send_hs
+varserver_log
+S_job_execution
+S_run_summary
+*.trk
+*.header
+
+# CFS-Trick runtime files
+sims/SIM_CFS/cf/apps/*.so
+sims/SIM_CFS/cf/apps/*.bin
+sims/SIM_CFS/cf/apps/*.tbl
+sims/SIM_CFS/cf/*.so
+sims/SIM_CFS/cf/*.bin
+sims/SIM_CFS/cf/*.tbl
+sims/SIM_*/Modified_data/trick_cfs
+sims/SIM_*/build
+.trick
+EEPROM.DAT
+trick.zip
+
+
+# Doxgen auto-gen files
+docs/html
+docs/latex
+S_sie.json
+*.csv
+cfs_out.txt

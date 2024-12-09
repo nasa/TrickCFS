@@ -1,0 +1,4 @@
+Changes since TrickCFS v2.2.0
+ - Added copyright notice to all source files.
+ - Updated for draco-rc5 and sch_lab compatibility
+ - Draco compatibility update. Complete rework of osal and psp and sch_trick. Added functions to override default osal/psp...

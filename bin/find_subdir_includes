@@ -1,0 +1,22 @@
+#!/bin/bash
+
+containsElement () {
+  local e match="$1"
+  shift
+  for e; do [[ "$e" == "$match" ]] && return 0; done
+  return 1
+}
+
+dirlist=()
+ret1=$(find $1 -name "*.h")
+ret2=$(find $1 -name "*.hh")
+for fname in $ret1 $ret2;
+do
+  dirName=$(dirname $fname)
+  containsElement -I$dirName "${dirlist[@]}"
+  alreadyExists=$?
+  if [ "$alreadyExists" == 1 ] ; then
+     dirlist+=(-I$dirName) ;
+  fi
+done
+sort -r <<< "${dirlist[*]}"

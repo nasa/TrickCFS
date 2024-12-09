@@ -1,0 +1,52 @@
+// Defines Trick/CFS scheduler calls in CFSCoreSimObject
+##include "BaseTrickCFSScheduler.hh"
+##include "TrickCFSInterface.hh"
+##include "TrickCFSQueueManager.hh"
+##include "TrickCFS_C_proto.h"
+
+#define CLASSNAME_TO_HEADER(s) str_CLASSNAME_TO_HEADER(s.hh)
+#define str_CLASSNAME_TO_HEADER(s) #s
+
+##include CLASSNAME_TO_HEADER(TRICKCFS_SCHEDULER_CLASS)
+
+// CFSCoreSimObject should stay the same from app to app.
+class TrickCFSInterfaceSimObject : public Trick::SimObject {
+public:
+        TrickCFSInterface iface;
+        TrickCFSQueueManager queueManager;
+
+private:
+        TRICKCFS_SCHEDULER_CLASS sched_inst;
+
+public:
+##ifdef SWIG
+%immutable;
+##endif
+        TRICKCFS_SCHEDULER_CLASS & sched;
+##ifdef SWIG
+%mutable;
+##endif
+
+        TrickCFSInterfaceSimObject() : sched(sched_inst) {
+            double cfsRate = SCH_TRICK_minor_frame_rate();
+            if(fabs(cfsRate) < 1.0e-16) {
+               cfsRate = 1.0;
+            } else {
+               exec_set_software_frame(cfsRate);
+            }
+
+            ("initialization") iface.initialize(exec_get_curr_job()->name) ;
+
+            ("initialization") iface.processExternalDeclarations();
+
+            (cfsRate, "scheduled") iface.updateCFS();
+
+            ("shutdown") OS_shutdown() ;
+        }
+private:
+    // Unimplemented copy constructor and assignment operator
+    TrickCFSInterfaceSimObject(const TrickCFSInterfaceSimObject&);
+    TrickCFSInterfaceSimObject& operator =(const TrickCFSInterfaceSimObject&);
+} ;
+
+TrickCFSInterfaceSimObject cfs_core;

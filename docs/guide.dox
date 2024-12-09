@@ -1,0 +1,333 @@
+/**
+@page guide TrickCFS User's Guide
+
+This user's guide describes how to build and run a cFS system in the Trick simulation framework. Note that the 
+simulation "SIM_CFS" is provided as a template for the S_define, S_overrides.mk,  input.py and Modified_data files and 
+directories to start with integrating a CFS mission build. The steps below describe the process for integrating, 
+building and running a TrickCFS simulation. Throughout this page, we will refer to the integration simulation as 
+"SIM_CFS".
+
+@section buildtcfs Integrating TrickCFS
+
+To integrate TrickCFS, the following steps must be followed:
+
+@subsection Environment
+
+Import Note on 32-bit vs 64-bit:
+Both 32-bit and 64-bit versions of Trick and CFS are supported. The sole driver for which version is required is the CFS build itself.
+
+If the target CFS build is 32-bit, then the user will need to compile Trick in 32-bit mode, see 
+https://nasa.github.io/trick/documentation/install_guide/Install-Guide#bit-mode
+
+There are several make variables TrickCFS uses to help build and automatically include build flags from the CFS build.
+Two of them may be set via environment variables though they may also be set in the S_overrides.mk.
+The \b CFS_MISSION_HOME variable specifies the location of the integrated CFS mission directory. This is primarily used for
+knowing which directory to execute the <em>make prep install</em> commands. Typically this directory contains the cfe, psp, osal, apps, and build directories but other directory layouts
+The other variable that may be set via environment variable is the \b TRICKCFS_HOME variable. This is necessary if your 
+integrated sim is outside the trickcfs sims directory, then \b TRICKCFS_HOME must also be set to find the provided makefiles 
+and python modules automatically.
+
+@subsection S_define
+Include the TrickCFS headers and sim object in the S_define. This is conventiently encapsulated in the file 
+\e default_trick_cfs.sm in the \e share/trick_cfs/sim_objects directory. Note that the \e share/trick_cfs directory is 
+automatically added to the \b TRICK_SFLAGS variable so that Trick can find the file more easily.
+
+\include default_trick_cfs.sm
+
+There are a couple of things to note about the contents of this file.
+-# There are no CFS App-specific includes required for this sim object.
+-# The rate of the CFS update job is determined by the specific scheduler's implementation and how it divides tables 
+   by time. For the SCH_LAB app, this rate is set in the config table itself and is calculated as 
+   \f$1000000/(ConfigTable->TickRate)\f$ 
+
+This is all you need in the S_define to have a minimal TrickCFS simulation environment.
+
+@subsection buildtcfsS_overrides S_overrides
+
+With the S_define populated, it is time to add the make variables from CFS to the Trick build process. Trick 
+automatically includes a makefile (if it exists) in the build process if it is named "S_overrides.mk". By specifiying 
+some make variables and including the TrickCFS provided "core_overrides.mk", Trick can execute the CFS build process, 
+automatically add the pertinent include paths for building the Trick PSP/OSAL and copy the cFS mission build results 
+into the simulation area for execution.
+
+The S_overrides.mk file should look like the following:
+
+\include S_overrides.mk 
+
+The first section simply ensures that the \b CFS_MISSION_HOME variable has been set and determines the root directory of the 
+TrickCFS package unless the \b TRICKCFS_HOME environment variable has been set. This is customizable to your simulation
+preferences.
+
+The next section helps to configure aspects of the build including specifying the type of scheduler app being replaced. 
+The variables and their purposes are as follows:
+- \b TRICKCFS_SCHEDULER_CLASS = Specify the TrickCFS scheduler implementation by specifying the class name (defaults=SchLabTrickCFSScheduler)
+- \b CFS_SCH_NAME = the name of the directory containing the scheduler app code (default=sch_lab)
+- \b CFS_COMPAT_TAG = optional setting to specify a different cFS version other than `main` such as the release tag. If TrickCFS has compatability 
+     options for the tag, it will include those build rules and pieces of code rather than the default implementation
+- \b CFS_CFE_HOME, \b CFE_OSAL_HOME, \b CFE_PSP_HOME, \b CFS_APP_HOME are all paths to their respective directory locations (defaults=<em>"${CFS_MISSION_HOME}/<product>"</em>)
+- \b CFS_BUILD_HOME = path to the cFS build directory from running `make prep install`. (defaults=<em>"${CFS_MISSION_HOME}/build"</em>)
+- \b CFS_CPU = Specify the name of the target/cpuname as set in the cmake variable \b MISSION_CPUNAMES to use for the TrickCFS build (default=cpu1) 
+
+Once these are set, the TrickCFS makefiles can determine include paths and build rules necessary to build CFS along with 
+the standard Trick components.
+
+The next two optional variables \b CFS_APPS and \b TRICK_CFS_APPS are variables for adding applications to the build process of 
+the simulation. There are two differences for how the \b CFS_APPS and \b TRICK_CFS_APPS variables are used. The first is the location it
+looks for the app directory. For \b CFS_APPS, the location is presumed to be in the \b CFS_APPS_HOME directory whereas 
+\b TRICK_CFS_APPS looks in the <em>"${TRICKCFS_HOME}/apps"</em> directory. The TrickCFS makefiles will search for headers in the subdirectories 
+of <em>"${CFS_APPS_HOME}/${CFS_APPS}"</em> and <em>"${TRICKCFS_HOME}/apps/${TRICK_CFS_APPS}"</em>
+to automatically add include directives to the \b TRICK_CFLAGS and \b TRICK_CXXFLAGS flags.
+The other difference is that the \b TRICK_CFS_APPS variable designates the app to be compiled via Trick rather than the 
+CFS mission build. It does this by simply finding all the source files matching 
+<em>"${TRICK_CFS_HOME}/apps/<app>/fsw/src/*.c"</em> and adds make rules to compile them into an <em>"<app>.so"</em> which is 
+placed in the final cf apps location. See \ref addappdata and \ref advanced for more use cases for utilizing these 
+variables.
+
+The last section contains some variables that target or modify the build behavior of a CFS cmake-based build.
+
+The \b PREP_PRECMDS and \b INSTALL_PRECMDS execute bash shell commands prior to executing "make prep" or "make install",
+respectively.
+
+The \b PREP_OPTIONS and \b INSTALL_OPTIONS will insert the text in the variables into the "make prep" or "make install"
+commands, respectively. For example, if you want the cFS build to output more information as it compildes, you could 
+set `INSTALL_OPTIONS:="VERBOSE=1"`.
+
+In most cases, these last four variables will be blank. To override the cFS build commands further, you may also set the \b PREP_MAKE_CMD 
+and\or \b INSTALL_MAKE_CMD to completely override the commands to be executed for cFS build.
+
+After the pertinent make variables are set, simply including the TrickCFS \e core_overrides.mk file at the end of 
+\e S_overrides.mk. This should complete the final compilation linkage of
+the Trick and CFS build systems.
+
+@subsection inputfile Input File
+
+It is convenient to use the power of Python within the Trick input file to integrate CFS builds into the simulation. 
+Fortunately, once the CFS build results are copied into the simulation directory, we simply need to make a slight 
+modification to the \e cfe_es_startup.scr file to replace any instances of SCH with the SCH_trick scheduler and also move 
+it to the beginning of the file. For convenience, a TrickCFS python module is provided in the
+<em>"share/trick_cfs/python"</em> directory. This directory is automatically added to the \b PYTHON_PATH so that one can
+import the trick_cfs Python module with ease.
+
+To use the module and execute the TrickCFS simulation as specified in the CFS mission build's \e cfe_es_startup.scr, 
+simply include the following in the input file:
+
+\code{.py}
+import trick_cfs
+
+trick_cfs.parse_cfe_es_startup()
+
+trick_cfs.run_default_es_startup()
+\endcode
+
+The first line simply makes the trick_cfs python module available to the input file for use. The second parses the 
+entries of the \e cfe_es_startup.scr as provided by the CFS mission build and stores them in cfs app definition maps in 
+Python. The last line says to use those definitions as specified in the original \e cfe_es_startup.scr file. This 
+completes the integration of a CFS mission into a Trick sim and reproduces the CFS mission with Trick's simulation 
+timing mechanisms.
+
+What if I need to set up a custom app list to execute? The trick_cfs module provides utilities to add CFS app
+definitions as well as the capability to execute a custom list of apps other than whatever was provided with the CFS
+mission. 
+
+To add a library simply provide the library name and entry point via 
+@code
+trick_cfs.add_lib_definition('<Library>', '<EntryPoint>')
+@endcode
+
+To add an app, provide the app name, entry point, priority, and stack size via
+@code
+trick_cfs.add_app_definition('<App>', '<EntryPoint>', <Priority>, <StackSize>)
+@endcode
+
+For example:
+@code
+trick_cfs.add_lib_definition('SAMPLE_LIB', 'SAMPLE_LibInit')
+
+trick_cfs.add_app_definition('CI_LAB', 'CI_Lab_AppMain', 60, 8192)
+trick_cfs.add_app_definition('TO_LAB', 'TO_Lab_AppMain', 70, 8192)
+@endcode
+
+will add \e sample_lib.so, \e ci_lab.so,and  \e to_lab.so to the list of possible apps to execute in
+a RUN. Special note that "Library"  and "App", must be the same as the file name without the ".so" extension in 
+lower-case to be properly loaded. 
+
+Finally, to execute the custom list of Apps, call \e trick_cfs.run_with_apps() rather than
+\e trick_cfs.run_default_es_startup()
+@code
+trick_cfs.run_with_apps(['CI_LAB','TO_LAB'])
+@endcode
+
+Okay, now we've got our app execution all sorted out but we still need to control the number of CPUs, or execute in
+perfect scheduler mode. See \ref scheduling for detailed explanations of the concepts referenced here. 
+
+To explicitly list the number of CPUs the CFS Apps are allowed to execute on, we need to set the CPU affinity for all 
+the CFS Apps to lock them down to a single core or set of cores. This can be done via 
+\e TrickCFSInterface::addCFSCPUAffinity. Each call to \e TrickCFSInterface::addCFSCPUAffinity adds the core by index to the 
+list of possible CPUs. Duplicate indices are ignored. An invalid CPU index will throw an error message as each App is
+spawned but will continue to execute.
+
+@code
+cfs_core.iface.addCFSCPUAffinity(0)
+cfs_core.iface.addCFSCPUAffinity(1)
+@endcode
+
+will lock the CFS Apps down to CPU 0 and 1.
+
+Finally, one may need TrickCFS's "perfect scheduler mode" for either development or Monte Carlo purposes. To enable
+simply set its flag to true.
+
+@code
+cfs_core.iface.perfectScheduleMode = True
+@endcode
+
+IMPORTANT NOTE: These settings only affect the execution of the CFS Apps. The Trick simulation itself is unaffected by 
+these settings and will proceed as normal or as configured via the Trick interfaces.
+
+@section addappdata Adding CFS App Data To Trick MemoryManager
+
+A TrickCFS user may desire to view CFS App data using Trick tools such as Trick View or Trick data logging. If this is 
+the case, then a little more work is required to get Trick to understand App data.
+
+@subsection S_define
+
+Trick needs to parse the CFS App header files in order to make lists of all the members of each class or structure in 
+the app. The mechanism for telling Trick which headers to parse is to include the top-most header of interest in the 
+S_define. The program that actually parses the headers is called Interface Code Generator or ICG for short. To 
+differentiate header includes from sim object module includes, header includes are prepended by Double pound '#' 
+includes.
+
+From the Trick User's Guide Wiki:
+
+> <b>Single pound "#" includes.</b>
+>
+> Include files with a single pound "#" are parsed as they are part of the S_define file. They are treated just as 
+> #include files in C or C++ files. These files usually include other sim objects or instantiations as part of the 
+> S_define file.
+> 
+> <b>Double pound "#" includes.</b>
+>
+> Include files with a double pound "##" are not parsed as part of the S_define file. These files are the model header 
+> files. They include the model class and structure definitions as well as C prototypes for functions used in the 
+> S_define file. Double pound files are copied, minus one pound, to S_source.hh.
+
+If Trick's memory model needs to understand a particular cFS app's data structures then include the proper header(s) 
+just as you would any Trick math model.
+
+For example, to include the to_lab app's headers, simply add the following to the S_define.
+\code
+##include "to_lab_app.h"
+\endcode
+
+Once included, recompile the sim and Trick will attempt to parse the structure types within the top-most header as well 
+as any child headers included. Thanks to the core_overrides.mk file included by default, all cFE structures are safely 
+ignored. 
+
+It is possible that you will run into ICG errors or compile errors if ICG cannnot figure out the type of a variable. 
+Other ICG errors will not be seen until run-time when Trick's MemoryManager will complain that it doesn't understand 
+something about the data structure. This doesn't typically kill the simulation but does warn the user that it can't see 
+a certain variable type. There are several reasons this may happen and several options to deal with it. For 
+compile-time issues, these are usually due to an unorthodox typedef, a missing include or even just organization of the 
+#include's in the app's headers incongruent to ICG's expectations. Compile-time errors usually means that the apps 
+headers will need some modification to fit within the Trick ICG scheme. If you run into a compile-time error, some 
+things to try are:
+
+-# Ensure that headers can be processed independently of how they are included in the top-level header
+-# Add a Trick ICG "ignore" comment on the line after the variable that fails. The comment can simply tell ICG not to 
+   process the variable @code WeirdType foo; /* ** Do not process */@endcode
+-# Put #ifndef guards around the variable(s) that file. Surround the variable with #ifndef TRICK_ICG and #endif to 
+   prevent ICG from seeing the bad type at all.
+   @code
+   #ifndef TRICK_ICG
+      WeirdType foo;
+   #endif
+   @endcode
+-# Ignore the specific file completely by adding it to the \b TRICK_ICG_EXCLUDE make variable in \e S_overrides.mk
+
+Most run-time "errors" are really just warnings and can be safely ignored but the user must question if the warning is 
+for a data type the user wishes to be able to observe. If the answer is no, you can leave the warning in place or 
+eliminate it by adding Trick ICG ignore comments or <em>#ifndef TRICK_ICG</em> guards.
+
+If the simulation manages to compile completely, then the bulk of the work is done and you can proceed to the next two 
+sections which are relatively straight-forward.
+
+@subsection S_overrides
+
+Trick must be told where to look for header files via the \b TRICK_CFLAGS and \b TRICK_CXXFLAGS. Fortunately, CFS Apps 
+typically have a common directory structure for where header files are placed. For convenience, the make variables \b CFS_APPS 
+and \b TRICK_CFS_APPS automatically add these include paths to the Trick variables. Simply add the App 
+top-most directory name to either variable and the standard includes will automatically be appended. See \ref 
+buildtcfsS_overrides for details of the difference between the variables.
+
+@code
+CFS_APPS = cfs_foo1 cfs_foo2
+
+TRICK_CFS_APPS = foo3 hello_world
+@endcode
+
+If the default includes are insufficient for a specific App, you can manually add the necessary include paths to either 
+the environment variable \b TRICK_CFLAGS or the make variables \b TRICK_CFLAGS and \b TRICK_CXXFLAGS in the 
+S_overrides.mk directly.
+
+@code
+setenv TRICK_CFLAGS "-I$HOME/cfs_repo/foo/include:${TRICK_CFLAGS}"
+export TRICK_CFLAGS="-I$HOME/cfs_repo/foo/include:${TRICK_CFLAGS}"
+@endcode
+
+or
+
+@code
+/* S_overrides.mk */
+
+TRICK_CFLAGS += -I$HOME/cfs_repo/foo/include
+TRICK_CXXFLAGS += -I$HOME/cfs_repo/foo/include
+
+@endcode
+
+Note that adding the paths via the S_overrides.mk, it is very important to add the same include paths to the \b TRICK_CXXFLAGS 
+even though the cFS App is likely only C-code. This is to satisfy ICG generated code's include 
+requirements which is in C++.
+
+
+@subsection inputfile Input File
+
+
+Now that we have all the necessary code compiled and linked into the simulation, the last step is to tell Trick what 
+data you want to look at, what its type is and where it is located. The TrickCFSInterface class provides a nice 
+input-file method to be able to add this information at run-time via the \e TrickCFSInterface::addInstance method. 
+
+Additionally, a convenient Python function is provided in the trick_cfs module which passes information to the 
+addInstance method. For example:
+
+@code{.py}
+trick_cfs.add_data(cfs_core, "HELLO_WORLD_AppData_t", "g_HELLO_WORLD_AppData")
+trick_cfs.add_data(cfs_core, "MESSENGERONE_AppData_t", "g_MESSENGERONE_AppData", "messengerOne")
+@endcode
+
+The add_data function takes the TrickCFSInterfaceSimObject instance name as the first argument so that the python 
+function can call the correct C++ method. The second argument is the string name of the data type of the variable of 
+interest. In most cases, this will be the top-level struct type in the CFS App. The third argument is the name of the 
+variable associated with the data type. This must be a global variable or static declaration whose address that can be 
+obtained via a call to \e OS_SymbolLookup() (which calls dlsym). The last argument is optional and is simply a string alias 
+for the name of the variable from Trick's perspective. For example, the second line will obtain a pointer in memory to 
+the \e g_MESSENGERONE_AppData variable but will be seen from Trick View or data logging as named \e messengerOne. 
+
+Now that Trick knows where the cFS app data is, all of Trick's memory model tools can be utilized. During runtime, the
+data is viewable by any standard Variable Server interface such as TrickView. Trick's data recording capabilities can
+also be utilized to store data over simulated time.
+
+@section advanced Advanced TrickCFS Capabilities
+
+TBD!
+
+@subsection S_define
+TBD!
+
+@subsection S_overrides
+TBD!
+
+@subsection inputfile Input File
+TBD!
+
+
+*/
+

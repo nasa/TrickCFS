@@ -1,0 +1,239 @@
+/**
+@page design TrickCFS Design
+
+This page is a discussion of the problems and design decisions made to solve integration issues associated with
+building, running and synchronizing two unrelated systems that were not specifically designed to work together.
+
+@section build Build System Design
+
+Trick and cFS have two independent build systems with virtually no overlap or convenient intersection point. 
+
+The Trick build methodology is to use scripts to parse the S_define in order to produce makefiles. The 
+dependencies and source files that are to be built are listed in the model's header and source files. Scripts will 
+parse a section of comments at the top of each file and accumulate all the required files from the 
+<em>LIBRARY DEPENDENCY</em> section of the Trick comment header. Each library dependency is then expected to be built as
+object files to be statically linked into the S_main executable. 
+
+The cFS methodology uses the cmake build environment and some directory layout options for apps and customization to build 
+cFE, OSAL, PSP and Apps with minimal modification. Typically, any modifications 
+required for cFS cmake files are to add compiler directives and flags or to add a target/build information that needs 
+additional scripting. In general, the build system uses cmake files and a definitions directory (or "defs") to define
+all the build information.
+
+To reduce integration efforts, this project leverages as much of both build systems as possible. Using the
+<em>S_overrides.mk</em> architecture for adding build rules to a simulation, the cFS-specific build process is added
+as make rules to the Trick simulation build process. There is no need for Trick to build the cFE components. 
+Instead, the cFS build process is executed from an S_overrides.mk make rule and the resulting compiled objects or 
+libraries is included in the final linking process or copied to an appropriate directory.
+
+For the most part, this inclusion is automatic if the user is utilizing a standard build scheme of cFS. If a 
+non-standard scheme is required for some reason, the user will have to provide a similar make "overrides" file following 
+the TrickCFS-provided files as a template. Whatever the implementation is, the following must be identified and 
+included or built:
+- Locations for:
+  - cFS mission root directory
+  - cFE root directory
+  - OSAL root directory
+  - PSP root directory
+  - cFS build directory
+- PSP/OSAL compiler options required for the Posix Linux or Mac implementations.
+- cFE, OSAL and PSP include paths (can be derived from the location above)
+- location of cFE components built as objects or libraries
+- a list of cFS apps that need to be understood by the Trick memory model (for automatic include path resolution)
+- a list of cFS apps that need to be built by Trick
+
+Using these specifications, appropriate flags and include paths can be automatically added with little to no user 
+additions.
+
+@section sched Scheduler Design
+
+Both cFS and Trick have concepts of a "scheduler" but there is very little in common between them. Trick and cFS have 
+different definitions of what it means to "schedule" something and, in order to synchronize them, both approaches must 
+be fully understood. 
+
+Trick's scheduler is central to the simulation environment. In Trick, the scheduler is essentially a list of jobs that 
+must be executed in a user-specified cycle and order on one or more threads including the main thread. The execution of 
+a job is a direct call to a function or method and the calling thread must wait until the job is complete before 
+proceeding. If the job is on the main thread or on a thread configured to synchronize with the main thread, the entire 
+simulation will wait for completion of that job. Absolute and elapsed time are simulation artifacts provided by the
+executive. Execution as a realtime simulation is optional and, in reality, only pertains to what kind of clock the 
+simulation uses to determine time elapsed, a real world wall clock or simulated clock. 
+
+The cFS scheduler is very different from Trick as it is an optional App not included with cFE nor built as a core cFE 
+component. Instead of calling functions or methods, the cFS scheduler app (SCH) writes messages (commonly referred to as
+"wake up messages") to the software bus (SB) according to a message and schedule table. There is no feedback or 
+acknowledgement from the apps receiving the messages to the scheduler. SCH synchronizes to a real world wall clock via 
+the cFE Time Service (TIME). The default SCH table represents scheduling over the course of one second. There are 100 
+time slots available and 5 possible messages per slot. This means that one can schedule 5 messages every 10 
+milliseconds. If multiple Apps are signaled in a single time slot, it is expected that the realtime priority for each 
+App handled by the OS scheduler will determine the order of App execution.
+
+Scheduling concept           |    cFS          | Trick
+---------------------------- | --------------- | -----------------------------
+Signaling Technique          | SB message      | explicit method/function call
+Feedback                     | None          | job must complete to continue
+Time resolution              | Pre-determined by the table interval | Calculated by Trick for as fast as required
+Is scheduler required?       | No | Yes
+Can execute in non-realtime? | No | Yes
+Can execute in realtime?     | Yes | Yes
+Relies on OS scheduling?     | Yes | No
+Is target App for signal required?      | No | Yes
+
+It is important that anything scheduler-related be fully controlled by the simulation environment. Therefore, the design
+approach is for Trick to assume the role of SCH in a cFS/Trick hybrid app (SCH_trick). In SCH_trick, most of the code to
+signal awaiting cFS apps remains intact including executing as a cFS task on a thread. Where SCH_trick behaves 
+differently than SCH is in queries for time and synchronization. SCH uses signals from the TIME service to wake up and 
+determine which current slot to send messages. SCH_trick waits for a signal from the main thread to wake up and use the
+current simulation time to determine the current slot. This is enough to reproduce the responsibilities of the SCH app
+within a Trick simulation but it is not enough for synchronization. To help with synchronization, SCH_trick also notes
+the which signals were sent to which apps as a way to note which cFS apps were triggered. This approach is further 
+explained in the \ref sync design section.
+
+
+@section sync Synchronization Approach
+
+As discussed in the \ref sched section, the lack of feedback from a task to the scheduler is a significant difference 
+between cFS and Trick. In a simulation environment, it is imperative to know exactly when it is safe to proceed with
+incrementing simulated time, especially in a non-realtime environment.  Fortunately, the abstraction of the OS from cFS 
+in the OSAL and PSP packages, gives us places in code to intercept calls to functions that involve task completion and 
+waiting for signals to proceed. At the time of this writing, the two primary functions a cFS app uses to wait to do work 
+is  \e CFE_SB_ReceiveBuffer() and \e OS_TaskDelay(). The first function asks to receive a message from the SB and to wait a 
+designated amount of time until it gets a message or time expires. The second function is the abstraction for a call to 
+"sleep" and simply waits a designated amount of time to wake up.
+
+@subsection syncdelay Task Delays
+
+Handling task delays isn't terribly difficult. The requirement is that the task delay synchronize with simulated time 
+and not wall clock time. The class TrickCFSInterface tracks task delays for each possible CFS task (or thread in posix) 
+and counts down the time according to elapsed simulation time. Calls to \e OS_TaskDelay() are passed to 
+\e TrickCFSInterface::addTaskDelay with a task id and time to wait and then the task pends on a signal that must be sent 
+by the main thread. The Trick job \e TrickCFSInterface::updateTaskTimes() handles reducing the time to wait until it 
+reaches or goes below zero. Once it reaches zero, it sends the signal to the task to proceed and the CFS App can 
+continue according to OS scheduling.
+
+@subsection syncsch SCH Signaling and Feedback
+
+As of TRICKCFS v3.1.0, the open source SCH app https://github.com/nasa/sch is incompatible with newer cFS releases. A
+different scheduler SCH_LAB app is actively updated and kept up to date at https://github.com/nasa/sch_lab and is 
+already included in the release bundle. To improve support for multiple scheduler possiblities, the sch_trick app was 
+redesigned to use a C++ abstract base class to define common interfaces and some default method implementations that have 
+no cFS/SCH app dependencies and may be useful in the derived classes. The SCH_LAB-compatible app is implemented in the 
+derived class \e SchLabTrickCFSScheduler. For convenience the scheduler class may be selected simply by setting the 
+\e TRICKCFS_SCHEDULER_CLASS make variable in the S_overrides.mk file to the name of the class. The header will be included
+and an instance created automatically in the build process.
+
+Not all implementations will be detailed here but the following is for the SchLabTrickCFSScheduler class:
+Pulling the code from \e SCH_LAB_AppInit() and \e SCH_Lab_AppMain, we obtain the logic for table registrations, sync 
+signal, cycle and schedule table processing setup as all the logic for processing the schedule table. We make two modifications.
+-# Implement the \e SchLabTrickCFSScheduler::initTables() method using the contents of \e SCH_LAB_AppInit(). Remove the registration
+   of the \e CFE_TIME_1HZ_CMD_MID and Command Pipe creation call. Remove the timer creation logic and the associated semaphore setup.
+-# Implement the \e SchLabTrickCFSScheduler::processScheduleTable() method using the portion of the \e SCH_Lab_AppMain function
+   that loops over the schedule table. Replace the call to \e CFE_SB_TransmitMsg with \e sendScheduledMessage which wraps the 
+   message transmission with mechanisms for detecting the wakeup message signals and commands.
+
+The overall synchronization with the Trick main thread happens in the base class \e BaseTrickCFSScheduler::loop() where 
+a single table processing call is surrounded by synchronization calls with the main thread and the \e TrickCFSInterface instance.. 
+
+Now that we have control of the SCH app's execution and table processing, the next step is to introduce cFS App 
+completion feedback. To have feedback, we have to have some knowledge about which apps were "triggered" from SCH_trick. 
+The cFE Software Bus (SB) knows where all the SCH wakeup messages are going. This knowledge gives us a hint as to which 
+apps are waiting on a SCH signal. At this point, the SCH_trick app will only give us knowledge of which cFS apps were 
+signaled. We still need to know when the target App has executed according to the wakeup message. We could levy 
+requirements on the cFS apps themselves to add code to tell the Trick executive when the app is finished and waiting 
+for the next signal. However, this is undesirable from a usage and integration perspective. Thus, the approach below.
+
+When SCH sends a wakeup signal to a cFS App, it makes a call to \e CFE_SB_ReceiveBuffer(). \e CFE_SB_ReceiveBuffer() eventually 
+calls the OSAL function \e OS_QueueGet() which is where we can inject code without altering cFE or any cFS App. 
+Typically, this is called with either a zero timeout (polling) or an infinite timeout (block until ready) but may also 
+have a finite expiration time to allow the app to do some work even if an SCH wakeup message is not present. Every call 
+to this function can be treated as a signal to TrickCFS that the App is done processing a message. This is a great point
+in the OSAL abstraction to inject some code with calls to a TrickCFS API to check if the pipe is related to an App 
+triggered by the scheduler and mark it complete if it was triggered. After marking complete or determining that there 
+was no trigger, the code proceeds like normal to attempt to receive a message. Once a message is received on the pipe, 
+we can check the contents of the message to see which message ID was sent. If the message ID matches a message sent from
+the scheduler, proceed to mark the message as acknowledged by the App and allow the App to proceed to do its work.
+
+A call to \e OS_QueueGet() with a finite timeout has to be treated specially. Instead of blocking on the pipe until 
+time is expired, a do-while loop is implemented that polls the pipe with a small timeout instead of a full block. If 
+there is no message on the pipe, make a call to \e OS_TaskDelay() and wait until the Trick main thread signals to 
+proceed. By introducing task delays and polling, the timing of the cFS App is preserved as well as it provides 
+information that the task is waiting for a signal of some kind.
+
+Once all the SCH entries for the current frame are processed, the main thread has to decide when to wait on a CFS app 
+and when to proceed. For some apps, this is fairly straight-forward as it immediately receives the SCH trigger, 
+acknowledges, does its work and ends up waiting for a message on the same pipe. For other apps, it can get complicated. 
+For instance, the CI app will wait for a wakeup ID to be sent to its scheduler pipe for one second but the 
+scheduler configuration may be to send a SEND_HK command to CI's command pipe every second instead. In a cFS-only 
+universe, the CI should wait the full second before processing the SEND_HK command. To mimic this in Trick, the main 
+thread has to determine that the app is in a task delay and so should not wait on the trigger-complete signal until 
+later in the simulation. Once the task delay is done, it should then look for the acknowledgement and completion of the 
+SEND_HK command before allowing the simulation to proceed.
+
+TrickCFS implements a fairly tight scheduling requirement in that it will wait for all apps that have been triggered to
+complete within the current frame. Unless the triggered App is in the \e TaskDelay state, the TrickCFS main thread will
+wait for the App to complete processing of each SCH-sent message ID.
+
+@section scheduling OS Scheduling and Perfect Scheduler
+
+Even though the TrickCFS scheduler triggers each App according to the SCH schedule tables there is some behavior that,
+if not understood, can confuse users and is worthy of a section dedication to OS Scheduling. TrickCFS will simply use 
+the cFE SB inter-App communication system to signal Apps to proceed. The confusion that may arise is when multiple Apps 
+are scheduled within the same SCH time slot. The big question is: <b>What order will the Apps execute?</b>
+
+On flight computers with only one CPU, this behavior is relatively simple. Assuming that the user has the appropriate
+priveliges for the OS, the Apps will execute one at a time from highest-to-lowest priority as specified in 
+\e cfe_es_startup.scr. Most machines executing a TrickCFS simulation will almost certainly be a multi-core host
+executing the Linux scheduler. Additionally, recent advances in radiation hardening of multi-core flight computers have
+introduced the complication of dealing with the problem of scheduling across multiple CPUs and potential parallelism.
+
+The goal of a TrickCFS simulation is to provide the user with as many tools as possible to closely mimic the behavior of
+the real system, including multi-core issues if necessary. 
+
+One of the ways to deal with this is simply to get out of the way of OS scheduling and allow things to proceed according
+to the OS. 
+
+Perhaps the OS scheduler is sufficient but the number of cores the FSW is allowed to execute on needs to be 
+limited. TrickCFS provides an interface to set affinity to the CFS Apps to one or multiple CPUs as needed. This approach
+still relies on OS scheduling but can help the user limit CPU resources to something similar to the target processor(s).
+By adding affinity, TrickCFS will force the CFS Apps to run on a limited set of cores and get closer to mimicking the 
+behavior of the target computer. In other words, even though TrickCFS may be executing on a 64-core machine, adding CFS CPU 
+Affinity to CPU 3 will force the CFS Apps to contend for a single CPU. If the user has elevated privileges and is able 
+to execute with realtime priority, the Apps will execute in the exact same order as expected on the target platform. If
+the target platform has 2 cores, then setting the CPU Affinity to CPU 3 and CPU 4 on the same TrickCFS host will
+introduce the scheduling problems a 2-core machine has. If beneficial, the user may then do development work with
+TrickCFS to solve scheduler problems as well as FSW issues.
+
+Yet, another approach is to use TrickCFS's "perfect scheduler mode" capability to bypass the OS scheduler and multi-core
+complications altogether to exercise perfect scheduling. In this mode, TrickCFS will enforce schedule signalling such that
+it mimics a single-CPU system with realtime priorities despite any OS-related configuration. Even if the other scheduler option(s) 
+serve your needs for development, our experience is that the "perfect scheduler mode" is useful for Monte Carlo 
+configurations as it bypasses elevated priveliges on multi-user hosts.
+
+In conclusion, it is important to understand your target system, host system and how you wish to execute TrickCFS to
+produce your desired results.
+
+
+@section memory Mapping Memory of cFS Apps Approach
+
+For getting Trick's memory model to understand cFS app memory, leveraging standard Trick interface methodologies is
+all that is required. By relying on the Trick Interface Code Generator (ICG), all that is needed from a cFS app is
+header information to understand the data types associated with any cFS app. Including headers in the Trick S_define is
+sufficient to accomplish this. The rest of the work is in associating instances of cFS app types. This can be done a 
+couple of ways. When building the TrickCFS simulation, one can assign a pointer instantiated in a \e Trick::SimObject 
+instance to the cFS app global data. TrickCFS also provides an input file method to specify the global data and the 
+associated type and desired Trick name for the data. This method will utilize a call to \e OS_SymbolLookup() to find 
+the address of the data so the symbol name must be resolved according to the requirements of \e dlsym().
+
+
+@section misc Miscellaneous Design Decisions Explained
+
+The content below is a list of decisions or approaches that may be of additoinal interest to any user of TrickCFS.
+
+- Note that the \e main() function is defined in the OSAL BSP package file bsp_start.c. For TrickCFS, the function is
+  wrapped and renamed to \e psp_main_wrapper(). 
+- The \e OS_Application_Run() is normally defined in the PSP package file cfe_psp_start.c. For TrickCFS, this function is 
+  implemented such that it registers the signal handling similar to the POSIX Linux PSP implementation but does not loop 
+  forever until signalled nor does it execute the cleanup calls.
+- The cleanup code is implemented in the Trick-posix function \e OS_Shutdown() and is called from the S_define as a "shutdown" job.
+
+*/

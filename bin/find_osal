@@ -1,0 +1,2 @@
+#!/bin/bash
+find $1 -name osal -type d | grep default_$2/osal$

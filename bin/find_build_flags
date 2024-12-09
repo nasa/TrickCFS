@@ -1,0 +1,2 @@
+#!/bin/bash
+find $1 -name flags.make | grep -v CMakeFiles/tblobj

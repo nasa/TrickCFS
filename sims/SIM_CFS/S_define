@@ -1,0 +1,19 @@
+/************************TRICK HEADER*************************
+PURPOSE:
+    (CFS integration)
+LIBRARY DEPENDENCIES:
+    (
+    )
+*************************************************************/
+
+#include "sim_objects/default_trick_sys.sm"
+
+#include "sim_objects/default_trick_cfs.sm"
+
+// Defines FSW structures
+##include "to_lab_app.h"
+
+// Connect objects
+void create_connections() {
+}
+
