@@ -34,7 +34,7 @@ and testing of real-world systems.
 
 # Documentation
 - See docs/Release-Notes.txt to see changes since previous version
-- See https://github.com/nasa/TrickCFS/releases/tag/v3.1.0/TrickCFS.pdf for PDF version of the documentation
+- See https://github.com/nasa/TrickCFS/releases/download/3.1.0-oss/TrickCFS.pdf for PDF version of the documentation
 - To generate browser-based documentation execute `make doxy` from top directory with suggested minimal version Doxygen 
   v1.8.14
 
